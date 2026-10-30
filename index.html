@@ -6,19 +6,19 @@
 <title>редактор фото</title>
 <style>
   * { box-sizing: border-box; border-radius: 0 !important; margin: 0; padding: 0; }
+  [hidden] { display: none !important; }
   body { background: #E6E6E6; color: #1B1B1F; font-family: Arial, Helvetica, sans-serif; font-size: 14px; min-height: 100vh; display: flex; flex-direction: column; }
   header { padding: 12px 16px; border-bottom: 1px solid #1B1B1F; font-size: 18px; }
   main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; flex: 1; }
   #stage { flex: 1 1 360px; min-width: 0; min-height: 320px; display: flex; align-items: center; justify-content: center; border: 1px solid #1B1B1F; padding: 8px; }
   #stage canvas { max-width: 100%; max-height: 75vh; display: block; }
-  #status { position: absolute; }
   #panel { flex: 0 0 280px; max-width: 100%; display: flex; flex-direction: column; gap: 12px; }
   fieldset { border: 1px solid #1B1B1F; padding: 10px; }
   legend { padding: 0 4px; font-weight: bold; }
   label.row { display: block; margin-bottom: 8px; }
   label.row span { display: flex; justify-content: space-between; }
   input[type=range] { width: 100%; }
-  .btn { display: block; background: #1B1B1F; color: #E6E6E6; border: none; padding: 10px; font-size: 14px; cursor: pointer; width: 100%; margin-top: 6px; text-align: center; }
+  .btn { display: block; background: #1B1B1F; color: #E6E6E6; border: none; padding: 10px; font-size: 14px; cursor: pointer; width: 100%; text-align: center; }
   .btn-outline { background: #E6E6E6; color: #1B1B1F; border: 1px solid #1B1B1F; }
   .btn:disabled { opacity: .4; cursor: default; }
   #file { display: none; }
@@ -77,8 +77,8 @@ const PREVIEW_MAX = 1200;
 const SLIDERS = ['cx','cy','rad','shx','shy','stx','sty','contrast','bright','thr','grain','gsize'];
 const DEFAULTS = {cx:50, cy:40, rad:40, shx:0, shy:0, stx:0, sty:0, contrast:0, bright:0, thr:0, grain:0, gsize:2, gray:false};
 
-let srcCanvas = null;   // полный размер
-let prevCanvas = null;  // уменьшенная копия для предпросмотра
+let srcCanvas = null;
+let prevCanvas = null;
 let rafId = 0;
 
 function updateLabels() {
@@ -99,7 +99,6 @@ function hash(x, y) {
   return (h >>> 0) / 4294967295;
 }
 
-// основная обработка: возвращает canvas нужного размера
 function processImage(src, p) {
   const W = src.width, H = src.height;
   const sd = src.getContext('2d').getImageData(0, 0, W, H).data;
@@ -117,7 +116,6 @@ function processImage(src, p) {
   const warp = p.shx || p.shy || p.stx || p.sty;
 
   const cf = 259 * (p.contrast * 2.55 + 255) / (255 * (259 - p.contrast * 2.55));
-  const cAdd = p.contrast * 2.55;
   const br = p.bright * 2.55;
   const bs = Math.max(1, Math.round(p.gsize * W / 1000));
   const gAmp = p.grain * 1.5;
@@ -143,10 +141,9 @@ function processImage(src, p) {
       const i00 = (y0 * W + x0) * 4, i10 = (y0 * W + x1) * 4;
       const i01 = (y1 * W + x0) * 4, i11 = (y1 * W + x1) * 4;
 
-      let r = 0, g = 0, b = 0;
-      r = (sd[i00] * (1 - fx) + sd[i10] * fx) * (1 - fy) + (sd[i01] * (1 - fx) + sd[i11] * fx) * fy;
-      g = (sd[i00+1] * (1 - fx) + sd[i10+1] * fx) * (1 - fy) + (sd[i01+1] * (1 - fx) + sd[i11+1] * fx) * fy;
-      b = (sd[i00+2] * (1 - fx) + sd[i10+2] * fx) * (1 - fy) + (sd[i01+2] * (1 - fx) + sd[i11+2] * fx) * fy;
+      let r = (sd[i00] * (1 - fx) + sd[i10] * fx) * (1 - fy) + (sd[i01] * (1 - fx) + sd[i11] * fx) * fy;
+      let g = (sd[i00+1] * (1 - fx) + sd[i10+1] * fx) * (1 - fy) + (sd[i01+1] * (1 - fx) + sd[i11+1] * fx) * fy;
+      let b = (sd[i00+2] * (1 - fx) + sd[i10+2] * fx) * (1 - fy) + (sd[i01+2] * (1 - fx) + sd[i11+2] * fx) * fy;
 
       if (p.gray) {
         const l = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -241,7 +238,6 @@ function resetAll() {
   schedulePreview();
 }
 
-// события
 $('file').addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 SLIDERS.forEach(k => $(k).addEventListener('input', schedulePreview));
 $('gray').addEventListener('change', schedulePreview);
