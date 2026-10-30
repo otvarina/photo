@@ -10,8 +10,11 @@
   body { background: #E6E6E6; color: #1B1B1F; font-family: Arial, Helvetica, sans-serif; font-size: 14px; min-height: 100vh; display: flex; flex-direction: column; }
   header { padding: 12px 16px; border-bottom: 1px solid #1B1B1F; font-size: 18px; }
   main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; flex: 1; }
-  #stage { flex: 1 1 360px; min-width: 0; min-height: 320px; display: flex; align-items: center; justify-content: center; border: 1px solid #1B1B1F; padding: 8px; }
-  #stage canvas { max-width: 100%; max-height: 75vh; display: block; }
+  #stage { flex: 1 1 360px; min-width: 0; min-height: 320px; display: flex; align-items: center; justify-content: center; border: 1px solid #1B1B1F; padding: 16px; position: relative; overflow: hidden; touch-action: none; user-select: none; }
+  #wrap { position: relative; display: inline-block; }
+  #view { display: block; max-width: 100%; max-height: 70vh; }
+  #frame { position: absolute; border: 1px dashed #1B1B1F; pointer-events: none; }
+  .h { position: absolute; width: 14px; height: 14px; background: #1B1B1F; border: 2px solid #E6E6E6; transform: translate(-50%, -50%); pointer-events: auto; cursor: pointer; touch-action: none; }
   #panel { flex: 0 0 280px; max-width: 100%; display: flex; flex-direction: column; gap: 12px; }
   fieldset { border: 1px solid #1B1B1F; padding: 10px; }
   legend { padding: 0 4px; font-weight: bold; }
@@ -22,6 +25,7 @@
   .btn-outline { background: #E6E6E6; color: #1B1B1F; border: 1px solid #1B1B1F; }
   .btn:disabled { opacity: .4; cursor: default; }
   #file { display: none; }
+  #busy { min-height: 18px; }
   footer { padding: 8px 16px; font-size: 11px; text-align: center; border-top: 1px solid #1B1B1F; }
   footer a { color: #1B1B1F; }
 </style>
@@ -32,7 +36,19 @@
 <main>
   <div id="stage">
     <span id="hint">загрузите фото</span>
-    <canvas id="view" hidden></canvas>
+    <div id="wrap" hidden>
+      <canvas id="view"></canvas>
+      <div id="frame">
+        <div class="h" data-h="nw" style="left:0;top:0"></div>
+        <div class="h" data-h="n"  style="left:50%;top:0"></div>
+        <div class="h" data-h="ne" style="left:100%;top:0"></div>
+        <div class="h" data-h="e"  style="left:100%;top:50%"></div>
+        <div class="h" data-h="se" style="left:100%;top:100%"></div>
+        <div class="h" data-h="s"  style="left:50%;top:100%"></div>
+        <div class="h" data-h="sw" style="left:0;top:100%"></div>
+        <div class="h" data-h="w"  style="left:0;top:50%"></div>
+      </div>
+    </div>
   </div>
 
   <div id="panel">
@@ -42,14 +58,10 @@
     </label>
 
     <fieldset>
-      <legend>деформация</legend>
-      <label class="row"><span>центр по x <b id="cxv"></b></span><input type="range" id="cx" min="0" max="100" value="50"></label>
-      <label class="row"><span>центр по y <b id="cyv"></b></span><input type="range" id="cy" min="0" max="100" value="40"></label>
-      <label class="row"><span>радиус <b id="radv"></b></span><input type="range" id="rad" min="5" max="90" value="40"></label>
-      <label class="row"><span>сдвиг влево/вправо <b id="shxv"></b></span><input type="range" id="shx" min="-100" max="100" value="0"></label>
-      <label class="row"><span>сдвиг вверх/вниз <b id="shyv"></b></span><input type="range" id="shy" min="-100" max="100" value="0"></label>
-      <label class="row"><span>растянуть по x <b id="stxv"></b></span><input type="range" id="stx" min="-90" max="90" value="0"></label>
-      <label class="row"><span>растянуть по y <b id="styv"></b></span><input type="range" id="sty" min="-90" max="90" value="0"></label>
+      <legend>масштаб</legend>
+      <p>тяните маркеры на рамке мышкой или пальцем. во время движения картинка растягивается, после отпускания сохраняются важные участки (лица, детали), сжимается фон.</p>
+      <p id="sizeinfo"></p>
+      <button class="btn btn-outline" id="applySeam" disabled>пересчитать с учетом содержимого</button>
     </fieldset>
 
     <fieldset>
@@ -65,7 +77,7 @@
     <button class="btn btn-outline" id="reset" disabled>сбросить</button>
     <button class="btn" id="dl-jpg" disabled>скачать jpg</button>
     <button class="btn" id="dl-png" disabled>скачать png</button>
-    <div id="busy" style="min-height:18px"></div>
+    <div id="busy"></div>
   </div>
 </main>
 
@@ -73,21 +85,27 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const PREVIEW_MAX = 1200;
-const SLIDERS = ['cx','cy','rad','shx','shy','stx','sty','contrast','bright','thr','grain','gsize'];
-const DEFAULTS = {cx:50, cy:40, rad:40, shx:0, shy:0, stx:0, sty:0, contrast:0, bright:0, thr:0, grain:0, gsize:2, gray:false};
+const WORK_MAX = 800;      // рабочее разрешение для seam carving
+const PREVIEW_MAX = 1000;  // предпросмотр при растяжении
+const EFFECTS = ['contrast','bright','thr','grain','gsize'];
 
-let srcCanvas = null;
-let prevCanvas = null;
+let orig = null;      // исходное изображение (canvas, полный размер)
+let base = null;      // текущая геометрия (canvas), показывается на экране
+let work = null;      // последний результат seam carving (или исходный масштаб), от него тянем маркеры
+let geo = null;       // {w,h} текущий размер базы
+let box = null;       // {x,y,w,h} рамка в координатах view (пиксели холста вида)
+let drag = null;      // активное перетаскивание
 let rafId = 0;
+let seamTimer = 0;
+let seamJob = 0;
 
 function updateLabels() {
-  SLIDERS.forEach(k => $(k + 'v').textContent = $(k).value);
+  EFFECTS.forEach(k => $(k + 'v').textContent = $(k).value);
 }
 
-function getParams() {
+function getEffects() {
   const p = {};
-  SLIDERS.forEach(k => p[k] = +$(k).value);
+  EFFECTS.forEach(k => p[k] = +$(k).value);
   p.gray = $('gray').checked;
   return p;
 }
@@ -99,22 +117,14 @@ function hash(x, y) {
   return (h >>> 0) / 4294967295;
 }
 
-function processImage(src, p) {
+// эффекты (ч/б, контраст, яркость, порог, зерно) — применяются к готовому canvas
+function applyEffects(src, p) {
   const W = src.width, H = src.height;
-  const sd = src.getContext('2d').getImageData(0, 0, W, H).data;
   const out = document.createElement('canvas');
   out.width = W; out.height = H;
   const octx = out.getContext('2d');
-  const img = octx.createImageData(W, H);
-  const od = img.data;
-
-  const minDim = Math.min(W, H);
-  const cx = W * p.cx / 100, cy = H * p.cy / 100;
-  const R = minDim * p.rad / 100;
-  const shx = minDim * p.shx / 100, shy = minDim * p.shy / 100;
-  const bx = p.stx / 100, by = p.sty / 100;
-  const warp = p.shx || p.shy || p.stx || p.sty;
-
+  const img = src.getContext('2d').getImageData(0, 0, W, H);
+  const d = img.data;
   const cf = 259 * (p.contrast * 2.55 + 255) / (255 * (259 - p.contrast * 2.55));
   const br = p.bright * 2.55;
   const bs = Math.max(1, Math.round(p.gsize * W / 1000));
@@ -122,103 +132,287 @@ function processImage(src, p) {
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      let sx = x, sy = y;
-      if (warp && R > 0) {
-        const dx = x - cx, dy = y - cy;
-        const d = Math.sqrt(dx * dx + dy * dy) / R;
-        if (d < 1) {
-          const f = (1 - d) * (1 - d);
-          sx = cx + dx * (1 - bx * f) - shx * f;
-          sy = cy + dy * (1 - by * f) - shy * f;
-        }
-      }
-      sx = Math.min(Math.max(sx, 0), W - 1);
-      sy = Math.min(Math.max(sy, 0), H - 1);
-
-      const x0 = Math.floor(sx), y0 = Math.floor(sy);
-      const x1 = Math.min(x0 + 1, W - 1), y1 = Math.min(y0 + 1, H - 1);
-      const fx = sx - x0, fy = sy - y0;
-      const i00 = (y0 * W + x0) * 4, i10 = (y0 * W + x1) * 4;
-      const i01 = (y1 * W + x0) * 4, i11 = (y1 * W + x1) * 4;
-
-      let r = (sd[i00] * (1 - fx) + sd[i10] * fx) * (1 - fy) + (sd[i01] * (1 - fx) + sd[i11] * fx) * fy;
-      let g = (sd[i00+1] * (1 - fx) + sd[i10+1] * fx) * (1 - fy) + (sd[i01+1] * (1 - fx) + sd[i11+1] * fx) * fy;
-      let b = (sd[i00+2] * (1 - fx) + sd[i10+2] * fx) * (1 - fy) + (sd[i01+2] * (1 - fx) + sd[i11+2] * fx) * fy;
-
-      if (p.gray) {
-        const l = 0.299 * r + 0.587 * g + 0.114 * b;
-        r = g = b = l;
-      }
-
+      const o = (y * W + x) * 4;
+      let r = d[o], g = d[o+1], b = d[o+2];
+      if (p.gray) { const l = 0.299*r + 0.587*g + 0.114*b; r = g = b = l; }
       if (p.contrast !== 0) {
-        r = cf * (r - 128) + 128;
-        g = cf * (g - 128) + 128;
-        b = cf * (b - 128) + 128;
+        r = cf * (r - 128) + 128; g = cf * (g - 128) + 128; b = cf * (b - 128) + 128;
       }
       r += br; g += br; b += br;
-
       if (p.thr > 0) {
-        const l = 0.299 * r + 0.587 * g + 0.114 * b;
-        const v = l >= p.thr ? 255 : 0;
-        r = g = b = v;
+        const l = 0.299*r + 0.587*g + 0.114*b;
+        r = g = b = l >= p.thr ? 255 : 0;
       }
-
       if (p.grain > 0) {
         const n = (hash(Math.floor(x / bs), Math.floor(y / bs)) - 0.5) * 2 * gAmp;
         r += n; g += n; b += n;
       }
-
-      const o = (y * W + x) * 4;
-      od[o] = r; od[o+1] = g; od[o+2] = b; od[o+3] = 255;
+      d[o] = r; d[o+1] = g; d[o+2] = b; d[o+3] = 255;
     }
   }
   octx.putImageData(img, 0, 0);
   return out;
 }
 
-function renderPreview() {
-  if (!prevCanvas) return;
-  const out = processImage(prevCanvas, getParams());
+// рисуем текущую базу с эффектами в видимый холст
+function render() {
+  if (!base) return;
+  const eff = applyEffects(base, getEffects());
   const view = $('view');
-  view.width = out.width;
-  view.height = out.height;
-  view.getContext('2d').drawImage(out, 0, 0);
+  view.width = eff.width;
+  view.height = eff.height;
+  view.getContext('2d').drawImage(eff, 0, 0);
+  placeFrame();
 }
 
-function schedulePreview() {
+function placeFrame() {
+  const view = $('view');
+  const frame = $('frame');
+  frame.style.left = '0px';
+  frame.style.top = '0px';
+  frame.style.width = view.clientWidth + 'px';
+  frame.style.height = view.clientHeight + 'px';
+}
+
+function schedule() {
   updateLabels();
   cancelAnimationFrame(rafId);
-  rafId = requestAnimationFrame(renderPreview);
+  rafId = requestAnimationFrame(render);
 }
 
+function sizeInfo() {
+  if (!geo) return;
+  $('sizeinfo').textContent = 'размер: ' + geo.w + ' × ' + geo.h + ' px';
+}
+
+// прямое растяжение: сразу, без пересчёта швов
+function stretchBase(w, h) {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  c.getContext('2d').drawImage(work, 0, 0, c.width, c.height);
+  return c;
+}
+
+// seam carving: убираем/добавляем вертикальные и горизонтальные швы по энергии
+function energyMap(c) {
+  const W = c.width, H = c.height;
+  const d = c.getContext('2d').getImageData(0, 0, W, H).data;
+  const e = new Float32Array(W * H);
+  const L = i => 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const xl = Math.max(0, x - 1), xr = Math.min(W - 1, x + 1);
+      const yu = Math.max(0, y - 1), yd = Math.min(H - 1, y + 1);
+      const gx = L((y*W + xr)*4) - L((y*W + xl)*4);
+      const gy = L((yd*W + x)*4) - L((yu*W + x)*4);
+      e[y*W + x] = Math.abs(gx) + Math.abs(gy);
+    }
+  }
+  return e;
+}
+
+// удаление одного вертикального шва (динамика сверху вниз)
+function removeVSeam(img, W, H) {
+  const d = img.data;
+  const e = energyMap({width: W, height: H, getContext: () => ({ getImageData: () => img })});
+  const M = new Float32Array(W * H);
+  const back = new Int32Array(W * H);
+  for (let x = 0; x < W; x++) M[x] = e[x];
+  for (let y = 1; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      let best = M[(y-1)*W + x], bi = x;
+      if (x > 0 && M[(y-1)*W + x-1] < best) { best = M[(y-1)*W + x-1]; bi = x-1; }
+      if (x < W-1 && M[(y-1)*W + x+1] < best) { best = M[(y-1)*W + x+1]; bi = x+1; }
+      M[y*W + x] = e[y*W + x] + best;
+      back[y*W + x] = bi;
+    }
+  }
+  let x = 0;
+  for (let i = 1; i < W; i++) if (M[(H-1)*W + i] < M[(H-1)*W + x]) x = i;
+  const seam = new Int32Array(H);
+  for (let y = H - 1; y >= 0; y--) { seam[y] = x; x = back[y*W + x]; }
+  const nd = new Uint8ClampedArray((W - 1) * H * 4);
+  for (let y = 0; y < H; y++) {
+    let k = 0;
+    for (let xx = 0; xx < W; xx++) {
+      if (xx === seam[y]) continue;
+      const si = (y*W + xx) * 4, di = (y*(W-1) + k) * 4;
+      nd[di] = d[si]; nd[di+1] = d[si+1]; nd[di+2] = d[si+2]; nd[di+3] = 255;
+      k++;
+    }
+  }
+  return new ImageData(nd, W - 1, H);
+}
+
+function transpose(img) {
+  const W = img.width, H = img.height, s = img.data;
+  const nd = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const si = (y*W + x) * 4, di = (x*H + y) * 4;
+      nd[di] = s[si]; nd[di+1] = s[si+1]; nd[di+2] = s[si+2]; nd[di+3] = 255;
+    }
+  return new ImageData(nd, H, W);
+}
+
+// сжатие/растяжение с учётом содержимого, порциями (чтобы не зависал UI)
+function seamResize(c, targetW, targetH, done) {
+  const job = ++seamJob;
+  let img = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+  let W = c.width, H = c.height;
+
+  // ширина
+  function stepW() {
+    if (job !== seamJob) return;
+    if (W === targetW) return stepH();
+    if (W > targetW) {
+      const batch = Math.min(10, W - targetW);
+      for (let i = 0; i < batch; i++) { img = removeVSeam(img, W, H); W--; }
+      $('busy').textContent = 'считаю швы... ' + W + ' px';
+    } else {
+      // растяжение: дублируем самые спокойные швы (упрощённо — простым растяжением)
+      img = resizeSimple(img, W, H, targetW, H); W = targetW;
+    }
+    setTimeout(stepW, 0);
+  }
+
+  // высота: транспонируем и работаем как с шириной
+  function stepH() {
+    if (job !== seamJob) return;
+    if (H === targetH) return finish();
+    img = transpose(img);
+    let tW = img.width, tH = img.height; // tW = H, tH = W
+    const need = targetH;
+    if (H > need) {
+      let cW = H; // ширина в транспонированном виде
+      const batch = Math.min(10, H - need);
+      for (let i = 0; i < batch; i++) { img = removeVSeam(img, cW, tH); cW--; }
+      H = cW;
+      img = transpose(img);
+    } else {
+      img = transpose(img);
+      img = resizeSimple(img, img.width, img.height, img.width, need);
+      img = transpose(img);
+      H = need;
+    }
+    $('busy').textContent = 'считаю швы... ' + H + ' px';
+    setTimeout(stepH, 0);
+  }
+
+  function finish() {
+    $('busy').textContent = '';
+    const out = document.createElement('canvas');
+    out.width = W; out.height = H;
+    out.getContext('2d').putImageData(img, 0, 0);
+    done(out);
+  }
+
+  stepW();
+}
+
+// простое растяжение ImageData (для случаев, когда швы не нужны)
+function resizeSimple(img, W, H, nW, nH) {
+  const a = document.createElement('canvas');
+  a.width = W; a.height = H;
+  a.getContext('2d').putImageData(img, 0, 0);
+  const b = document.createElement('canvas');
+  b.width = nW; b.height = nH;
+  b.getContext('2d').drawImage(a, 0, 0, nW, nH);
+  return b.getContext('2d').getImageData(0, 0, nW, nH);
+}
+
+// загрузка
 function loadFile(file) {
   const img = new Image();
   img.onload = () => {
-    srcCanvas = document.createElement('canvas');
-    srcCanvas.width = img.naturalWidth;
-    srcCanvas.height = img.naturalHeight;
-    srcCanvas.getContext('2d').drawImage(img, 0, 0);
+    orig = document.createElement('canvas');
+    orig.width = img.naturalWidth;
+    orig.height = img.naturalHeight;
+    orig.getContext('2d').drawImage(img, 0, 0);
 
-    const s = Math.min(1, PREVIEW_MAX / Math.max(img.naturalWidth, img.naturalHeight));
-    prevCanvas = document.createElement('canvas');
-    prevCanvas.width = Math.round(img.naturalWidth * s);
-    prevCanvas.height = Math.round(img.naturalHeight * s);
-    prevCanvas.getContext('2d').drawImage(img, 0, 0, prevCanvas.width, prevCanvas.height);
+    const s = Math.min(1, WORK_MAX / Math.max(orig.width, orig.height));
+    base = document.createElement('canvas');
+    base.width = Math.round(orig.width * s);
+    base.height = Math.round(orig.height * s);
+    base.getContext('2d').drawImage(orig, 0, 0, base.width, base.height);
+    geo = { w: base.width, h: base.height };
+    work = base;
 
     $('hint').hidden = true;
-    $('view').hidden = false;
-    ['reset', 'dl-jpg', 'dl-png'].forEach(id => $(id).disabled = false);
+    $('wrap').hidden = false;
+    ['reset', 'dl-jpg', 'dl-png', 'applySeam'].forEach(id => $(id).disabled = false);
     URL.revokeObjectURL(img.src);
-    renderPreview();
+    sizeInfo();
+    render();
   };
   img.src = URL.createObjectURL(file);
 }
 
-function download(type) {
-  if (!srcCanvas) return;
-  $('busy').textContent = 'обработка полного размера...';
+// перетаскивание маркеров: мышь и касание (pointer events)
+function startDrag(e) {
+  const h = e.target.closest('.h');
+  if (!h) return;
+  e.preventDefault();
+  drag = { type: h.dataset.h, x: e.clientX, y: e.clientY, w: geo.w, h: geo.h };
+  h.setPointerCapture && h.setPointerCapture(e.pointerId);
+}
+
+function moveDrag(e) {
+  if (!drag) return;
+  const view = $('view');
+  const scaleX = geo.w / view.clientWidth;
+  const scaleY = geo.h / view.clientHeight;
+  const dx = (e.clientX - drag.x) * scaleX;
+  const dy = (e.clientY - drag.y) * scaleY;
+  let w = drag.w, h = drag.h;
+  if (drag.type.includes('e')) w = drag.w + dx;
+  if (drag.type.includes('w')) w = drag.w - dx;
+  if (drag.type.includes('s')) h = drag.h + dy;
+  if (drag.type.includes('n')) h = drag.h - dy;
+  w = Math.max(20, Math.round(w));
+  h = Math.max(20, Math.round(h));
+  previewStretch(w, h);
+}
+
+// во время движения — простое растяжение (быстро)
+function previewStretch(w, h) {
+  geo = { w, h };
+  sizeInfo();
+  base = stretchBase(w, h);
+  render();
+}
+
+function endDrag() {
+  if (!drag) return;
+  drag = null;
+  // после отпускания — пересчёт швов, если включено автоматическое применение
+  // (кнопка «пересчитать» делает то же вручную)
+}
+
+$('stage').addEventListener('pointerdown', startDrag);
+window.addEventListener('pointermove', moveDrag);
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
+
+$('applySeam').addEventListener('click', () => {
+  if (!base) return;
+  $('busy').textContent = 'считаю...';
   setTimeout(() => {
-    const out = processImage(srcCanvas, getParams());
+    seamResize(work, geo.w, geo.h, out => {
+      base = out;
+      work = out;
+      render();
+      $('busy').textContent = 'готово';
+    });
+  }, 30);
+});
+
+function download(type) {
+  if (!base) return;
+  $('busy').textContent = 'готовлю файл...';
+  setTimeout(() => {
+    const out = applyEffects(base, getEffects());
     const mime = type === 'png' ? 'image/png' : 'image/jpeg';
     out.toBlob(blob => {
       const a = document.createElement('a');
@@ -233,14 +427,23 @@ function download(type) {
 }
 
 function resetAll() {
-  SLIDERS.forEach(k => $(k).value = DEFAULTS[k]);
-  $('gray').checked = DEFAULTS.gray;
-  schedulePreview();
+  EFFECTS.forEach(k => $(k).value = {contrast:0, bright:0, thr:0, grain:0, gsize:2}[k]);
+  $('gray').checked = false;
+  if (orig) {
+    base = document.createElement('canvas');
+    base.width = Math.round(orig.width * Math.min(1, WORK_MAX / Math.max(orig.width, orig.height)));
+    base.height = Math.round(orig.height * Math.min(1, WORK_MAX / Math.max(orig.width, orig.height)));
+    base.getContext('2d').drawImage(orig, 0, 0, base.width, base.height);
+    geo = { w: base.width, h: base.height };
+    work = base;
+    sizeInfo();
+  }
+  schedule();
 }
 
 $('file').addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
-SLIDERS.forEach(k => $(k).addEventListener('input', schedulePreview));
-$('gray').addEventListener('change', schedulePreview);
+EFFECTS.forEach(k => $(k).addEventListener('input', schedule));
+$('gray').addEventListener('change', schedule);
 $('reset').addEventListener('click', resetAll);
 $('dl-jpg').addEventListener('click', () => download('jpg'));
 $('dl-png').addEventListener('click', () => download('png'));
