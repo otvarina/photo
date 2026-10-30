@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>исказитель</title>
+<style>
+  * { box-sizing: border-box; border-radius: 0 !important; margin: 0; padding: 0; }
+  [hidden] { display: none !important; }
+  body { background: #E6E6E6; color: #1B1B1F; font-family: Arial, Helvetica, sans-serif; font-size: 14px; min-height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 12px 16px; border-bottom: 1px solid #1B1B1F; font-size: 18px; }
+  main { display: flex; flex-direction: column; flex: 1; }
+
+  #stage { display: flex; align-items: center; justify-content: center; padding: 16px; min-height: 260px; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; border-bottom: 1px solid #1B1B1F; }
+  #wrap { position: relative; display: inline-block; line-height: 0; }
+  #view { display: block; max-width: 100%; max-height: 60vh; touch-action: none; }
+  #frame { position: absolute; left: 0; top: 0; border: 1px dashed #1B1B1F; pointer-events: none; }
+  .h { position: absolute; width: 16px; height: 16px; background: #1B1B1F; border: 2px solid #E6E6E6; transform: translate(-50%, -50%); pointer-events: auto; touch-action: none; }
+  .h[data-h="nw"], .h[data-h="se"] { cursor: nwse-resize; }
+  .h[data-h="ne"], .h[data-h="sw"] { cursor: nesw-resize; }
+  .h[data-h="n"], .h[data-h="s"] { cursor: ns-resize; }
+  .h[data-h="e"], .h[data-h="w"] { cursor: ew-resize; }
+
+  #panel { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+  fieldset { border: 1px solid #1B1B1F; padding: 10px; }
+  legend { padding: 0 4px; font-weight: bold; }
+  label.row { display: block; margin-bottom: 8px; }
+  label.row:last-child { margin-bottom: 0; }
+  label.row span { display: flex; justify-content: space-between; gap: 8px; }
+  input[type=range] { width: 100%; display: block; margin-top: 4px; }
+  input[type=checkbox] { margin-right: 6px; }
+  .btn { display: block; background: #1B1B1F; color: #E6E6E6; border: 1px solid #1B1B1F; padding: 10px; font: inherit; cursor: pointer; width: 100%; text-align: center; }
+  .btn-outline { background: #E6E6E6; color: #1B1B1F; }
+  .btn:disabled { opacity: .4; cursor: default; }
+  #file { display: none; }
+  footer { padding: 10px 16px; font-size: 11px; text-align: center; border-top: 1px solid #1B1B1F; }
+  footer a { color: #1B1B1F; }
+
+  @media (min-width: 760px) {
+    main { flex-direction: row; align-items: flex-start; gap: 16px; padding: 16px; }
+    #stage { flex: 1 1 auto; border: 1px solid #1B1B1F; min-height: 420px; }
+    #panel { flex: 0 0 300px; padding: 0; }
+    #view { max-height: 76vh; }
+  }
+</style>
+</head>
+<body>
+<header>исказитель</header>
+
+<main>
+  <div id="stage">
+    <span id="hint">загрузите фото</span>
+    <div id="wrap" hidden>
+      <canvas id="view"></canvas>
+      <div id="frame">
+        <div class="h" data-h="nw" style="left:0;top:0"></div>
+        <div class="h" data-h="n"  style="left:50%;top:0"></div>
+        <div class="h" data-h="ne" style="left:100%;top:0"></div>
+        <div class="h" data-h="e"  style="left:100%;top:50%"></div>
+        <div class="h" data-h="se" style="left:100%;top:100%"></div>
+        <div class="h" data-h="s"  style="left:50%;top:100%"></div>
+        <div class="h" data-h="sw" style="left:0;top:100%"></div>
+        <div class="h" data-h="w"  style="left:0;top:50%"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel">
+    <label class="btn">
+      загрузить фото
+      <input type="file" id="file" accept="image/*">
+    </label>
+
+    <fieldset>
+      <legend>цвет и эффекты</legend>
+      <label class="row"><input type="checkbox" id="gray">ч/б</label>
+      <label class="row"><span>контраст <b id="contrastv"></b></span><input type="range" id="contrast" min="-100" max="100" value="0"></label>
+      <label class="row"><span>яркость <b id="brightv"></b></span><input type="range" id="bright" min="-100" max="100" value="0"></label>
+      <label class="row"><span>порог <b id="thrv"></b></span><input type="range" id="thr" min="0" max="255" value="0"></label>
+      <label class="row"><span>зерно <b id="grainv"></b></span><input type="range" id="grain" min="0" max="100" value="0"></label>
+      <label class="row"><span>крупность зерна <b id="gsizev"></b></span><input type="range" id="gsize" min="1" max="10" value="2"></label>
+    </fieldset>
+
+    <button class="btn btn-outline" id="reset" disabled>сбросить</button>
+    <button class="btn" id="dl-jpg" disabled>скачать jpg</button>
+    <button class="btn btn-outline" id="dl-png" disabled>скачать png</button>
+  </div>
+</main>
+
+<footer>автор: <a href="https://t.me/navarotvar">ot.var</a></footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const PREVIEW_MAX = 640;          // рабочее разрешение предпросмотра
+const STRENGTH = 5;               // насколько сильно бережём контрастные области
+const FX = ['contrast','bright','thr','grain','gsize'];
+
+let full = null;                  // полное изображение
+let work = null;                  // уменьшенная база предпросмотра
+let impCol = null, impRow = null; // важность столбцов и строк (считается один раз)
+let fullImp = null;               // то же для полного разрешения (при скачивании)
+let tW = 0, tH = 0;               // текущий целевой размер (в координатах work)
+let drag = null;
+let rafId = 0;
+
+/* ---------- важность пикселей ---------- */
+
+function importance(c) {
+  const W = c.width, H = c.height;
+  const d = c.getContext('2d').getImageData(0, 0, W, H).data;
+  const col = new Float64Array(W), row = new Float64Array(H);
+
+  for (let y = 0; y < H; y++) {
+    const ya = (y > 0 ? y - 1 : 0) * W, yb = (y < H - 1 ? y + 1 : H - 1) * W, yc = y * W;
+    for (let x = 0; x < W; x++) {
+      const xl = x > 0 ? x - 1 : 0, xr = x < W - 1 ? x + 1 : W - 1;
+      const i = yc + x;
+      const gx = lum(d, (yc + xr) * 4) - lum(d, (yc + xl) * 4);
+      const gy = lum(d, (yb + x) * 4) - lum(d, (ya + x) * 4);
+      const e = Math.abs(gx) + Math.abs(gy);
+      col[x] += e; row[y] += e;
+    }
+  }
+  return { col: smooth(norm(col), Math.max(2, W >> 6)), row: smooth(norm(row), Math.max(2, H >> 6)) };
+}
+
+function lum(d, i) { return 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; }
+
+function norm(a) {
+  let m = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
+  const out = new Float64Array(a.length);
+  if (m <= 0) { out.fill(1); return out; }
+  for (let i = 0; i < a.length; i++) out[i] = a[i] / m;
+  return out;
+}
+
+function smooth(a, r) {
+  const out = new Float64Array(a.length);
+  for (let i = 0; i < a.length; i++) {
+    let s = 0, n = 0;
+    for (let k = -r; k <= r; k++) {
+      const j = i + k;
+      if (j >= 0 && j < a.length) { s += a[j]; n++; }
+    }
+    out[i] = s / n;
+  }
+  return out;
+}
+
+// карта соответствия: граница исходного столбца i -> позиция в результате
+function buildMap(imp, n, m) {
+  const w = new Float64Array(n);
+  let s = 0;
+  for (let i = 0; i < n; i++) { w[i] = 1 + STRENGTH * imp[i]; s += w[i]; }
+  const out = new Float64Array(n + 1);
+  let acc = 0;
+  for (let i = 0; i < n; i++) { out[i] = acc / s * m; acc += w[i]; }
+  out[n] = m;
+  return out;
+}
+
+/* ---------- деформация ---------- */
+
+function warp(srcCanvas, outW, outH, imp) {
+  const W = srcCanvas.width, H = srcCanvas.height;
+  outW = Math.max(8, Math.round(outW));
+  outH = Math.max(8, Math.round(outH));
+
+  const mid = document.createElement('canvas');
+  mid.width = outW; mid.height = H;
+  const mctx = mid.getContext('2d');
+
+  const mapX = buildMap(imp.col, W, outW);
+  const STEP = W > 900 ? 3 : 2;
+  for (let x = 0; x < W; x += STEP) {
+    const x2 = Math.min(W, x + STEP);
+    const d0 = mapX[x], d1 = mapX[x2];
+    if (d1 - d0 < 0.02) continue;
+    mctx.drawImage(srcCanvas, x, 0, x2 - x, H, d0, 0, (d1 - d0) + 0.6, H);
+  }
+
+  const out = document.createElement('canvas');
+  out.width = outW; out.height = outH;
+  const octx = out.getContext('2d');
+
+  const mapY = buildMap(imp.row, H, outH);
+  for (let y = 0; y < H; y += STEP) {
+    const y2 = Math.min(H, y + STEP);
+    const d0 = mapY[y], d1 = mapY[y2];
+    if (d1 - d0 < 0.02) continue;
+    octx.drawImage(mid, 0, y, outW, y2 - y, 0, d0, outW, (d1 - d0) + 0.6);
+  }
+  return out;
+}
+
+/* ---------- эффекты ---------- */
+
+function hash(x, y) {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967295;
+}
+
+function getFX() {
+  const p = {};
+  FX.forEach(k => p[k] = +$(k).value);
+  p.gray = $('gray').checked;
+  return p;
+}
+
+function applyFX(c, p) {
+  if (!p.gray && !p.contrast && !p.bright && !p.thr && !p.grain) return;
+  const W = c.width, H = c.height;
+  const ctx = c.getContext('2d');
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data;
+  const cf = 259 * (p.contrast * 2.55 + 255) / (255 * (259 - p.contrast * 2.55));
+  const br = p.bright * 2.55;
+  const bs = Math.max(1, Math.round(p.gsize * W / 1200));
+  const ga = p.grain * 1.5;
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const o = (y * W + x) * 4;
+      let r = d[o], g = d[o + 1], b = d[o + 2];
+      if (p.gray) { const l = 0.299 * r + 0.587 * g + 0.114 * b; r = g = b = l; }
+      if (p.contrast) {
+        r = cf * (r - 128) + 128; g = cf * (g - 128) + 128; b = cf * (b - 128) + 128;
+      }
+      r += br; g += br; b += br;
+      if (p.thr > 0) {
+        const l = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = g = b = l >= p.thr ? 255 : 0;
+      }
+      if (ga) {
+        const n = (hash(Math.floor(x / bs), Math.floor(y / bs)) - 0.5) * 2 * ga;
+        r += n; g += n; b += n;
+      }
+      d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+/* ---------- отрисовка ---------- */
+
+function updateLabels() { FX.forEach(k => $(k + 'v').textContent = $(k).value); }
+
+function render() {
+  if (!work) return;
+  const out = warp(work, tW, tH, { col: impCol, row: impRow });
+  applyFX(out, getFX());
+
+  const view = $('view');
+  view.width = out.width;
+  view.height = out.height;
+  const ctx = view.getContext('2d');
+  ctx.drawImage(out, 0, 0);
+
+  const frame = $('frame');
+  frame.style.width = view.offsetWidth + 'px';
+  frame.style.height = view.offsetHeight + 'px';
+}
+
+function schedule() {
+  updateLabels();
+  if (rafId) return;
+  rafId = requestAnimationFrame(() => { rafId = 0; render(); });
+}
+
+/* ---------- загрузка ---------- */
+
+function loadFile(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    full = document.createElement('canvas');
+    full.width = img.naturalWidth;
+    full.height = img.naturalHeight;
+    full.getContext('2d').drawImage(img, 0, 0);
+
+    const s = Math.min(1, PREVIEW_MAX / Math.max(img.naturalWidth, img.naturalHeight));
+    work = document.createElement('canvas');
+    work.width = Math.max(1, Math.round(img.naturalWidth * s));
+    work.height = Math.max(1, Math.round(img.naturalHeight * s));
+    work.getContext('2d').drawImage(img, 0, 0, work.width, work.height);
+
+    const im = importance(work);
+    impCol = im.col; impRow = im.row;
+    fullImp = null;
+
+    tW = work.width; tH = work.height;
+
+    $('hint').hidden = true;
+    $('wrap').hidden = false;
+    ['reset', 'dl-jpg', 'dl-png'].forEach(id => $(id).disabled = false);
+
+    URL.revokeObjectURL(url);
+    render();
+  };
+  img.onerror = () => URL.revokeObjectURL(url);
+  img.src = url;
+}
+
+/* ---------- перетаскивание ---------- */
+
+function startDrag(e) {
+  const h = e.target.closest('.h');
+  if (!h || !work) return;
+  e.preventDefault();
+  const r = $('view').getBoundingClientRect();
+  drag = {
+    type: h.dataset.h,
+    x: e.clientX, y: e.clientY,
+    w: tW, h: tH,
+    kx: tW / Math.max(1, r.width),
+    ky: tH / Math.max(1, r.height),
+    min: Math.max(8, Math.min(work.width, work.height) * 0.08),
+    max: Math.max(work.width, work.height) * 4
+  };
+  if (e.pointerId != null && h.setPointerCapture) h.setPointerCapture(e.pointerId);
+}
+
+function moveDrag(e) {
+  if (!drag) return;
+  const dx = (e.clientX - drag.x) * drag.kx;
+  const dy = (e.clientY - drag.y) * drag.ky;
+  const t = drag.type;
+  const clamp = v => Math.min(drag.max, Math.max(drag.min, v));
+
+  if (t === 'n' || t === 's') {
+    tH = clamp(drag.h + (t === 's' ? dy : -dy));
+  } else if (t === 'e' || t === 'w') {
+    tW = clamp(drag.w + (t === 'e' ? dx : -dx));
+  } else {
+    // углы: равномерное масштабирование по обеим осям
+    const sx = t.includes('e') ? 1 : -1;
+    const sy = t.includes('s') ? 1 : -1;
+    const fx = (drag.w + sx * dx) / drag.w;
+    const fy = (drag.h + sy * dy) / drag.h;
+    let f = (fx + fy) / 2;
+    f = Math.min(drag.max / drag.w, drag.max / drag.h, Math.max(drag.min / drag.w, drag.min / drag.h, f));
+    tW = drag.w * f;
+    tH = drag.h * f;
+  }
+  schedule();
+}
+
+function endDrag() { drag = null; }
+
+/* ---------- скачивание ---------- */
+
+function download(type) {
+  if (!full) return;
+  const rx = tW / work.width, ry = tH / work.height;
+  const outW = Math.max(8, Math.round(full.width * rx));
+  const outH = Math.max(8, Math.round(full.height * ry));
+
+  setTimeout(() => {
+    if (!fullImp) fullImp = importance(full);
+    const out = warp(full, outW, outH, fullImp);
+    applyFX(out, getFX());
+
+    out.toBlob(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'foto.' + type;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }, type === 'png' ? 'image/png' : 'image/jpeg', 0.95);
+  }, 20);
+}
+
+/* ---------- сброс ---------- */
+
+function resetAll() {
+  ['contrast', 'bright', 'thr', 'grain'].forEach(k => $(k).value = 0);
+  $('gsize').value = 2;
+  $('gray').checked = false;
+  if (work) { tW = work.width; tH = work.height; }
+  schedule();
+}
+
+/* ---------- события ---------- */
+
+$('file').addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+FX.forEach(k => $(k).addEventListener('input', schedule));
+$('gray').addEventListener('change', schedule);
+$('reset').addEventListener('click', resetAll);
+$('dl-jpg').addEventListener('click', () => download('jpg'));
+$('dl-png').addEventListener('click', () => download('png'));
+
+$('stage').addEventListener('pointerdown', startDrag);
+window.addEventListener('pointermove', moveDrag, { passive: true });
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
+window.addEventListener('resize', () => { if (work) render(); });
+
+updateLabels();
+</script>
+</body>
+</html>
